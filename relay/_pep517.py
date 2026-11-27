@@ -51,7 +51,9 @@ def build_sdist(sdist_directory, config_settings=None):
         (here / "_pep517.py", "_pep517.py"),
         (repo / "go.mod", "go.mod"),
         (repo / "go.sum", "go.sum"),
-        (repo / "relay", "relay"),
+        (repo / "cmd" / "outsider-relay", "cmd/outsider-relay"),
+        (repo / "internal" / "proto", "internal/proto"),
+        (repo / "internal" / "relay", "internal/relay"),
         (repo / "web", "web"),
     ]
     return core.build_sdist_for_project(
@@ -59,5 +61,4 @@ def build_sdist(sdist_directory, config_settings=None):
         entries=entries,
         sdist_directory=sdist_directory,
         bundle_backend_as="_pep517_core.py",
-        exclude_arcs={"relay/pyproject.toml", "relay/_pep517.py", "relay/_pep517_core.py"},
     )

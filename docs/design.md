@@ -1,6 +1,8 @@
 # Outsider — 端到端加密带外密钥传输与交接系统设计方案
 
-> **定位**：面向 AI Agent、自动化脚本与无头服务器环境的**带外（Out-of-Band）人工审批密钥传输系统**。实现「密钥不落盘、不进 LLM 上下文、中转端零知识、移动端密码管理器一键填充」的安全密钥解锁与交接流程。
+> **定位**：面向 AI Agent、自动化脚本与无头服务器环境的**带外（Out-of-Band）人工审批密钥传输系统**。实现「密钥不落盘、不进 LLM 上下文、中转端零知识、原生 SOPS（`age`）内存解密、移动端密码管理器一键填充」的安全密钥解锁与交接流程。
+>
+> 有关 Go CLI 重写、原生 SOPS（`age`）引擎、`[names.<slug>]` 校验登记表及 Web 端按需 `age` 私钥生成的完整细节，另见 [`docs/go-cli-sops-design.md`](go-cli-sops-design.md)。
 
 ---
 
@@ -18,22 +20,23 @@
 
 ```mermaid
 flowchart LR
-    Agent["AI Agent / 宿主脚本"] -->|"调用 Skill CLI"| Req["申请端 Requester (Rust CLI)"]
+    Agent["AI Agent / 宿主脚本"] -->|"调用 Skill CLI"| Req["申请端 Requester (Go CLI + 原生 SOPS)"]
     Req -->|"1. 生成临时 X25519 密钥对 (内存)\n2. 用长期 Ed25519 私钥对请求签名\n3. 提交请求并阻塞等待密文"| Relay["中转端 Relay (Go 单二进制 · 零知识)"]
     Relay -->|"4. 校验白名单公钥签名\n5. 推送通知 (含审批 URL)"| Notify["通知渠道 (Shoutrrr / Webhook)"]
     Notify -->|"6. 点击 URL 打开审批页"| App["批准端 Approver (内嵌浏览器 Web UI)"]
     PM["密码管理器 (Bitwarden / 1Password / Apple Passwords)"] -.->|"7. 自动识别表单并填充密钥"| App
     App -->|"8. 本地验签 (TOFU 已信任申请端公钥)\n9. 用申请端 X25519 公钥加密 (E2EE) 并上传密文"| Relay
     Relay -->|"10. 唤醒阻塞连接并一次性转发密文 (随即销毁)"| Req
-    Req -->|"11. 内存解密并擦除私钥\n12. 通过 env/stdin/file/askpass 交接"| Target["目标使用程序 (docker / psql / ssh / sops...)"]
+    Req -->|"11. 内存解密并擦除私钥 (可选 SOPS 内存解密)\n12. 通过 env/env-all/stdin/file/askpass 交接"| Target["目标使用程序 (docker / psql / ssh / pytest...)"]
 ```
 
 ### 1.3 核心设计原则
 
 - **中转端零知识与无数据库（Zero-Knowledge, DB-Free Relay）**：明文只在批准端浏览器和申请端 CLI 内存中存在；中转端仅通过静态配置文件（`relay.toml`）保存已信任申请端的公开 `Ed25519` 公钥列表，运行时会话与密文纯内存暂存、读后即焚、绝不落盘或记日志。
 - **端到端身份真实性（Ed25519 + 浏览器 TOFU）**：每台申请端持有长期 `Ed25519` 身份密钥对每次解锁请求签名；批准端浏览器在首次审批点击「信任并继续」后，将申请端公钥持久化保存在浏览器本地，后续自动验签，防范中转端调包临时公钥或篡改申请上下文。
-- **Agent 上下文隔离（LLM-Blind Handoff）**：申请端 CLI 仅通过 `outsider run` 作为父进程直接拉起目标程序并注入密钥，架构上不提供任何将明文打印到 `stdout` 的接口，同时默认对子进程输出执行实时脱敏（Redaction），确保密钥不进入 AI Agent 上下文。
-- **密码管理器原生友好**：批准端统一采用基于密钥名 slug 的路径前缀 URL 与标准登录表单，严格适配 Bitwarden、1Password、Apple Passwords 等自动填充引擎的 URI 匹配与表单识别规则。
+- **Agent 上下文隔离（LLM-Blind Handoff）**：申请端 CLI 仅通过 `outsider run` 作为父进程（或 Unix `exec` 直接替换进程）注入密钥，架构上不提供任何将明文打印到 `stdout` 的接口，并且子进程直接继承原生 TTY `stdout`/`stderr`，父进程完成交接即擦除内存、不在子进程运行期间持有明文副本。
+- **原生 SOPS（`age`）与最小权限**：审批端仅下发 `SOPS_AGE_KEY`，由 `outsider` 内置纯 Go SOPS v3 引擎在内存中解密本地加密 YAML 并提取全部或指定子集 KV，随即擦除 `SOPS_AGE_KEY`（永不传给子进程），无需宿主机安装 `sops`/`age`。
+- **密码管理器原生友好**：批准端统一采用基于密钥名 slug 的路径前缀 URL 与标准登录表单，严格适配 Bitwarden、1Password、Apple Passwords 等自动填充引擎的 URI 匹配与表单识别规则；SOPS 初始化场景下按需提供浏览器端零依赖 `age` 私钥生成辅助按钮。
 - **跨代理与弱网鲁棒**：阻塞等待采用 25 秒分片长轮询（Long Polling），避免被 Nginx / Cloudflare / 企业代理的空闲超时切断。
 
 ---
@@ -42,12 +45,12 @@ flowchart LR
 
 ### 2.1 唯一锁定密码学协议（Protocol `v1`）
 
-遵循「不提供运行时算法协商、通过协议版本隐式绑定唯一套件」原则，`v1` 协议唯一锁定以下组合（现代浏览器 `window.crypto.subtle` 全部原生支持，零第三方 JS 依赖）：
+遵循「不提供运行时算法协商、通过协议版本隐式绑定唯一套件」原则，`v1` 协议唯一锁定以下组合（Go 与现代浏览器 `window.crypto.subtle` 全部原生支持，零第三方 JS 依赖）：
 
 | 层级 | 锁定算法 | 生命周期与职责 |
 | :--- | :--- | :--- |
 | **申请端身份签名** | `Ed25519`（RFC 8032） | **长期密钥对**（`~/.config/outsider/identity.key`，`0600`）：仅用于对每次解锁请求签名，证明 `pk_req` 与上下文确由信任申请端发出（同时替代静态 `client_token`） |
-| **密钥交换（ECDH）** | `X25519`（RFC 7748） | **一次性临时密钥对**（纯内存生成、解密即擦除）：公钥固定 32 字节（Base64URL 为 43 字符）；严格拒绝全零共享密钥（`!shared.was_contributory()`） |
+| **密钥交换（ECDH）** | `X25519`（RFC 7748） | **一次性临时密钥对**（纯内存生成、解密即擦除）：公钥固定 32 字节（Base64URL 为 43 字符）；严格拒绝低阶点/全零共享密钥 |
 | **密钥派生（KDF）** | `HKDF-SHA256`（RFC 5869） | 从共享秘密派生 32 字节一次性对称加密密钥，并将双方公钥绑定进 `info`（Transcript Binding） |
 | **认证加密（AEAD）** | `AES-256-GCM` | 12 字节随机 Nonce + 16 字节认证标签；借助 `AAD` 绑定会话与上下文摘要 |
 
@@ -55,7 +58,7 @@ flowchart LR
 
 ### 2.2 上下文哈希与请求身份签名
 
-为彻底避免 Rust / Go / JS 三端在 JSON 规范化上的差异坑，`context_hash` 采用**长度前缀二进制编码**（三端各 ~10 行代码，字节级零歧义）：
+为彻底避免 Go / JS 跨端在 JSON 规范化上的差异坑，`context_hash` 采用**长度前缀二进制编码**（字节级零歧义）：
 
 ```text
 encode_str(s) = uint32_be(len(utf8(s))) || utf8(s)
@@ -130,7 +133,7 @@ sig = Ed25519.Sign(id_sk, sign_input)
 ```mermaid
 sequenceDiagram
     autonumber
-    participant CLI as 申请端 (Rust CLI)
+    participant CLI as 申请端 (Go CLI)
     participant Relay as 中转端 (Go Relay)
     participant Notify as 通知渠道 (Shoutrrr / Webhook)
     participant Web as 批准端 (Browser + Bitwarden)
@@ -154,7 +157,7 @@ sequenceDiagram
     Relay-->>Web: 返回 session_id, id_pk, client_name, pk_req, context, ts, ttl, nonce, sig, expires_at
     Web->>Web: 本地重算 context_hash + WebCrypto Ed25519 验签 (防篡改 pk_req 与上下文)
     Web->>Web: 查浏览器本地信任表 (TOFU: 已信任直接放行 / 首次点「信任并继续」保存 / 公钥突变红警阻断)
-    Web->>Web: 渲染登录表单, Bitwarden 匹配路径前缀 URL 并自动填充密钥
+    Web->>Web: 渲染登录表单, Bitwarden 匹配路径前缀 URL 并自动填充密钥 (SOPS 初始化按需提供 age 生成)
     Web->>Web: 点击「加密并发送」: 生成临时 X25519 epk, HKDF 派生密钥, AES-256-GCM 加密
     Web->>Relay: POST /v1/approve/{approve_token} (v=1, epk, nonce, ciphertext)
     Web->>Web: 清空表单输入与内存变量
@@ -162,10 +165,10 @@ sequenceDiagram
     Relay-->>Web: 200 OK (已发送)
 
     Relay-->>CLI: 唤醒长轮询, 返回加密信封 (同时从内存彻底删除密文!)
-    CLI->>CLI: 用 sk_req + 本地 AAD 解密; 立即 zeroize(sk_req)
-    CLI->>Target: 按指定模式注入密钥并拉起目标程序 (env/stdin/file/askpass/arg)
+    CLI->>CLI: 用 sk_req + 本地 AAD 解密; 立即擦除 sk_req (SOPS 模式内存解密并立即擦除 SOPS_AGE_KEY)
+    CLI->>Target: 按指定模式注入密钥并执行目标程序 (env/env-all/stdin/file/askpass/arg)
     Target-->>CLI: 进程退出 (exit code)
-    CLI->>CLI: 清理临时文件, zeroize(secret), 透传 exit code
+    CLI->>CLI: 清理临时文件, 擦除明文切片, 透传 exit code
 ```
 
 ### 2.6 威胁模型与信任边界
@@ -177,18 +180,19 @@ sequenceDiagram
 | **中转端主动 MITM（替换 `pk_req`）** | `Ed25519` 签名绑定 `pk_req`，批准端以浏览器本地已存的 `id_pk`（TOFU）验签，同名设备公钥突变触发红警阻断 | 审批页内嵌于自建中转单二进制，需信任自己维护的中转实例本身未被攻破 |
 | **不可信 Notifier（窃听元数据 / 抢先提交假密文 / 钓鱼）** | 1. **防伪造提交**：推荐前置 **Cloudflare Access（Email OTP）** 保护 `/approve/*` 与 `/v1/approve/*`；<br>2. **防元数据泄露**：可开启 `redact_notification_metadata = true` 仅推送审批链接；<br>3. **防钓鱼**：Bitwarden 按真实域名+路径前缀匹配，假域名不会弹出自动填充 | 不可信 Notifier 仍可能扣留或延迟消息（纯可用性 DoS） |
 | **恶意第三方刷通知轰炸（DoS）** | 中转端校验 `relay.toml` 中的 `trusted_clients` Ed25519 签名 + 时间戳/nonce 防重放 + 单设备并发与频率限制 | 有效缓解 |
-| **AI Agent 偷窥或日志泄露明文** | 不提供明文 `stdout` 输出接口；`outsider run` 直接托管子进程；`SKILL.md` 规范约束；默认 `--redact` 脱敏子进程输出 | 无法防御目标程序主动把密钥发往外网（需靠审批者审核通知中的命令摘要） |
+| **AI Agent 偷窥或日志泄露明文** | 不提供明文 `stdout` 输出接口；`outsider run` 直接注入或 `exec` 替换目标进程；SOPS 模式下 `SOPS_AGE_KEY` 永不暴露给子进程；`SKILL.md` 规范约束 | 无法防御目标程序主动把密钥打印到 `stdout` 或发往外网（需靠审批者审核通知中的命令摘要） |
 
 ---
 
-## 3. 申请端设计（Rust CLI + Agent Skill）
+## 3. 申请端设计（Go CLI + 原生 SOPS + Agent Skill）
 
-### 3.1 技术选型与内存安全
+### 3.1 技术选型与进程加固
 
-- **语言**：Rust（静态链接单文件二进制，支持 `linux-x86_64`、`linux-aarch64`、`macos-aarch64`、`macos-x86_64`、`windows-x86_64`）。
-- **内存卫生**：
-  - 所有私钥（`id_sk` 与临时 `sk_req`）、共享密钥、明文缓冲区统一使用 `zeroize::Zeroizing<T>` 包装，Drop 时强制清零内存。
-  - 注册 `SIGINT` / `SIGTERM` 信号处理，确保异常中断时也会清理临时文件并通知中转端取消请求（`DELETE /v1/requests/{id}`）。
+- **语言**：Go（与 Relay 统一单仓 `module outsider`，`CGO_ENABLED=0` 静态编译单文件二进制，复用 `internal/proto/`，二进制压缩 wheel ~3.4MB）。
+- **进程与内存卫生**：
+  - 启动即执行进程加固：Unix 设置 `RLIMIT_CORE = 0`（禁用 core dump），Linux 额外调用 `prctl(PR_SET_DUMPABLE, 0)`（阻断同 UID 非特权 `ptrace` 与 `/proc/<pid>/mem` 读取）。
+  - 敏感切片（`id_sk`、`sk_req`、`SOPS_AGE_KEY`、解密后明文）使用后立即 `clear(...)` 覆写清零；在 Unix 上对 `--env` / `--env-all` / `--arg-placeholder` 使用 `syscall.Exec` 直接替换进程，零父进程滞留。
+  - 注册 `SIGINT` / `SIGTERM` 信号处理，确保异常中断时清理临时文件并通知中转端取消请求（`DELETE /v1/requests/{id}`）。
 
 ### 3.2 命令行接口（CLI UX）
 
@@ -199,74 +203,71 @@ sequenceDiagram
 # 并直接输出可粘贴进 relay.toml 的 [[trusted_clients]] 片段与 8 位公钥指纹
 outsider init --relay https://relay.example.com --name macbook-pro
 
-# 查看当前设备公钥、TOML 片段与指纹
+# 查看当前设备公钥、TOML 片段与指纹；检查中转端连通性与签名白名单
 outsider id
-
-# 核心子命令：申请密钥并直接拉起目标程序
-# --name 既用于展示，也会自动规范化为审批 URL 路径段（如 DOCKER_PAT -> /approve/docker-pat/...）
-outsider run \
-  --name "DOCKER_PAT" \
-  --reason "Push release image v1.2.0" \
-  --timeout 120 \
-  --stdin \
-  -- docker login -u myuser --password-stdin
-
-# 环境变量注入示例（如数据库连接密码）
-outsider run \
-  --name "prod-db" \
-  --reason "Run database migration" \
-  --env PGPASSWORD \
-  -- psql -h db.prod -U admin -d app -f migrate.sql
-
-# 多变量 .env 推荐组合（Outsider + SOPS）：本地存加密的 .env.enc，远程仅审批提供单行 SOPS_AGE_KEY
-outsider run \
-  --name "myproject-sops" \
-  --reason "Run staging integration tests" \
-  --env SOPS_AGE_KEY \
-  -- sops exec-env .env.enc "pytest tests/integration/"
-
-# 检查与中转端连通性、签名白名单及本地配置状态
 outsider doctor
+
+# 校验登记表（统一管理 Direct 与 SOPS 审批名，仅经真实审批核验才能新增）
+outsider name ls
+outsider name add personal-sops --sops --desc "个人 SOPS 主私钥"
+outsider name set personal-sops --desc "更新备注（纯本地）"
+outsider name rm old-name
+
+# 原生 SOPS 管理（无需外部 sops/age 二进制，100% 互通官方 SOPS v3）
+outsider sops keys ~/.secrets.enc.yaml
+outsider sops init ~/.secrets.enc.yaml --name personal-sops
+outsider sops set ~/.secrets.enc.yaml GH_TOKEN db.password
+outsider sops unset ~/.secrets.enc.yaml OLD_KEY
+
+# SOPS 模式运行（自动反查 --name，内存解密并立即擦除 SOPS_AGE_KEY）
+outsider run --sops ~/.secrets.enc.yaml --reason "Run tests" --env-all -- pytest
+outsider run --sops ~/.secrets.enc.yaml --sops-key db.password --reason "Migrate DB" --env PGPASSWORD -- psql -h db.prod
+
+# Direct 单密钥模式运行
+outsider run --name "docker-pat" --reason "Push image v1.2.0" --stdin -- docker login -u myuser --password-stdin
 ```
 
 > **等待期终端反馈（`stderr`）**：阻塞等待审批期间，CLI 仅向 `stderr` 打印简洁状态（例如 `[outsider] Waiting for approval: prod-db (120s) | Device FP: 7K4M-9P2X`），绝不污染 `stdout`。
 
 ### 3.3 密钥交接方式（Handoff Modes）
 
-聚焦高频实用场景，`outsider run` 提供 **5 种密钥交接模式**（架构上不提供将明文输出到 `stdout` 的模式）：
+`outsider run` 解耦「密钥来源（Direct / SOPS）」与「交接方式」（架构上不提供将明文输出到 `stdout` 的模式）：
 
 | 模式 | CLI 参数 | 底层实现机制 | 典型适用程序 | 安全性 |
 | :--- | :--- | :--- | :--- | :---: |
-| **1. 环境变量** | `--env VAR` <br> `--env VAR="prefix_{{secret}}"` | 直接通过 `Command::env()` 注入子进程环境块，不污染父 Shell 环境 | `aws`、`curl`、`python`、`psql (PGPASSWORD)`、`gh (GH_TOKEN)`、`sops (SOPS_AGE_KEY)`、`terraform`、绝大多数 SDK | 高 |
+| **1. 环境变量** | `--env VAR` <br> `--env VAR="prefix_{{secret}}"` <br> `--env-all`（SOPS 多键） | 直接注入子进程环境块（Unix 使用 `syscall.Exec` 直接替换进程），不污染父 Shell 环境 | `aws`、`curl`、`python`、`psql (PGPASSWORD)`、`gh (GH_TOKEN)`、`pytest`、绝大多数 SDK | 高 |
 | **2. 标准输入** | `--stdin` <br> `--stdin-template "{{secret}}\n"` <br> `--no-stdin-newline` | 创建匿名管道写入明文后立即关闭写端，绑定为子进程 `stdin` | `docker login --password-stdin`、`sudo -S`、`rclone`、`openssl -pass stdin` | 极高 |
-| **3. 临时内存文件** | `--file` <br> `--file-env KEY_FILE` | 优先在 `/dev/shm`（Linux 内存盘）或系统临时目录创建 `0600` 随机临时文件，将路径注入参数占位符 `{{file}}` 或环境变量；子进程退出或收到信号时覆写清零并删除 | `ssh -i {{file}}`、`kubectl --kubeconfig {{file}}`、`ansible-vault --vault-password-file {{file}}`、证书/JSON 凭证文件 | 高 |
-| **4. ASKPASS 代理** | `--askpass` | 自动设置 `SSH_ASKPASS` / `SUDO_ASKPASS` / `GIT_ASKPASS` 指向 `outsider` 自身内部的 `askpass-helper`，通过父子进程间私有一次性 Unix Socket / 管道传递密钥，无需暴露给环境或屏幕 | `ssh`、`ssh-add`、`git push/fetch`、`sudo -A` | 极高 |
+| **3. 临时内存文件** | `--file` <br> `--file-env KEY_FILE` <br> `--file-format dotenv\|json\|yaml` | 优先在 `/dev/shm`（Linux 内存盘）或系统临时目录创建 `0600` 随机临时文件，将路径注入 `{{file}}` 或环境变量；退出或收到信号时覆写清零并删除 | `ssh -i {{file}}`、`docker compose --env-file {{file}}`、`kubectl --kubeconfig {{file}}`、证书/JSON 凭证 | 高 |
+| **4. ASKPASS 代理** | `--askpass` | 自动设置 `SSH_ASKPASS` / `SUDO_ASKPASS` / `GIT_ASKPASS` 指向 `outsider` 自身内部的 `askpass-helper`，通过父子进程间私有一次性 Unix Socket 传递密钥，无需暴露给环境或屏幕 | `ssh`、`ssh-add`、`git push/fetch`、`sudo -A` | 极高 |
 | **5. 命令行参数替换** | `--arg-placeholder "{{secret}}"` | 将目标命令 `argv` 中的占位符替换为明文 | 仅接受 `--token <val>` / `-p<val>` 的遗留 CLI | 中（同机用户可能经 `ps` 看到，CLI 会打印警告） |
-
-> **子进程输出脱敏（`--redact`，默认开启）**：
-> `outsider run` 代理子进程的 `stdout` 和 `stderr`，使用流式滑动窗口匹配明文（及其 Base64 / URL-encoded 变体），在转发给调用方（AI Agent）前自动替换为 `[REDACTED:OUTSIDER]`，防止目标命令报错或开启 debug 时意外把密钥打印回 LLM 上下文。
 
 ### 3.4 退出码约定
 
 当目标程序正常拉起并退出时，直接透传目标程序的退出码；仅当 `outsider` 自身阶段失败时返回保留退出码：
 
 - `0`：目标程序成功执行（或透传目标程序退出码）
-- `100`：配置错误或参数无效
+- `100`：配置错误、参数无效或 SOPS 元数据校验失败
 - `101`：无法连接中转端 / 设备公钥未授权或验签失败
-- `102`：等待超时（Expired）
-- `103`：密文解密或 AAD 完整性校验失败（疑似篡改）
+- `102`：等待超时（Expired）或取消
+- `103`：E2EE 密文或 SOPS 解密/完整性校验失败
 
 ### 3.5 本地配置结构
 
 默认目录：`~/.config/outsider/`
 - `identity.key`：申请端 `Ed25519` 长期私钥（强制校验权限 `0600`）
-- `config.toml`：运行配置（支持环境变量 `OUTSIDER_RELAY_URL`、`OUTSIDER_IDENTITY_KEY` 覆盖）：
+- `config.toml`：运行配置（`0600`，支持环境变量 `OUTSIDER_RELAY_URL`、`OUTSIDER_IDENTITY_KEY` 覆盖，历史 `default_redact` 字段静默兼容）：
 
 ```toml
 relay_url = "https://relay.example.com"
 identity_key_path = "~/.config/outsider/identity.key"
 default_timeout_secs = 120
-default_redact = true
+
+[names.personal-sops]
+description = "个人 SOPS 主私钥"
+sops_recipient = "age1..."
+
+[names.github-pat]
+description = "GitHub release token"
 ```
 
 ### 3.6 Agent Skill 分发结构
@@ -275,19 +276,10 @@ Skill 默认通过 `uvx` 直接基于 GitHub `main` 分支执行 `outsider`（�
 
 ```text
 outsider/
-├── SKILL.md                    # Agent 指令规范（默认通过 uvx 运行、触发场景、安全红线）
+├── SKILL.md                    # Agent 指令规范（默认通过 uvx 运行、SOPS 优先、安全红线）
 └── references/
-    └── handoff-examples.md     # 常见工具（sops/gh/ssh/psql/curl/openssl）的交接命令速查
+    └── handoff-examples.md     # 原生 SOPS、name 登记与 Direct 交接命令速查
 ```
-
-**`SKILL.md` 必须包含的核心规则**：
-1. **何时触发**：当任务需要敏感密钥/凭证、且宿主机环境变量或配置文件中不存在时，主动通过 `uvx --from 'git+https://github.com/BeautyyuYanli/Outsider@main#subdirectory=cli' outsider run` 申请；若项目采用 SOPS 加密的 `.env.enc` 管理多变量敏感配置，优先使用 `--env SOPS_AGE_KEY -- sops exec-env .env.enc "..."`（或 `sops exec-file`）组合。
-2. **禁止泄露红线**：
-   - 严禁尝试让目标命令 `echo` / `printenv` 或写文件来转存/打印密钥；优先使用不写磁盘的运行模式（如 `--env GH_TOKEN -- gh ...`，避免 `gh auth login` 等持久化写盘命令）。
-   - 严禁使用 `--arg-placeholder`（除非目标工具完全不支持 `env`/`stdin`/`file`/`askpass`）。
-   - 交接方式优先级严格遵循：`stdin` / `askpass` > `env` > `file` > `arg`。
-3. **提供清晰审批上下文**：必须填写有意义的简短 ASCII `--name`（同时作为 Bitwarden URL 路径匹配标识，如 `github-pat`、`prod-db`、`myproject-sops`）和 `--reason`（向用户清晰解释为什么需要该密钥以及将执行什么操作）。
-4. **超时处理**：若返回退出码 `102`（等待超时），向用户说明未收到批准并询问是否需要重新发起，**严禁自动循环重试骚扰用户**。
 
 ---
 
@@ -296,9 +288,8 @@ outsider/
 ### 4.1 技术选型与极简配置（无数据库）
 
 - **单静态二进制：Go（标准库 `net/http` + `embed.FS` + `crypto/ed25519` + 官方 `shoutrrr`）**
-  - 中转端不涉及 X25519 / AES-GCM 加解密，核心职责仅为验签、内存路由阻塞与通知分发；采用 Go 原生 `import` 官方 `shoutrrr` 库开箱支持 20+ 通知渠道，`CGO_ENABLED=0` 极速静态编译，内存占用 ~10MB。
+  - 中转端不涉及 X25519 / AES-GCM 加解密，核心职责仅为验签、内存路由阻塞与通知分发；与 Go CLI 共享 `internal/proto/` 协议实现，并与前端 JS 共享 `protocol/test-vectors.json` 跨语言测试向量，确保字节级一致。
   - 使用 `embed.FS` 将 `web/` 静态审批页直接内嵌进单二进制，可部署在任意 VPS、家庭服务器（搭配 Cloudflare Tunnel / Caddy 自动 HTTPS）或 Docker 容器中。
-  - 与 Rust CLI、前端 JS 共享一份 `protocol/test-vectors.json` 跨语言测试向量，确保 `context_hash` 与 `Ed25519` 签名字节级一致。
 - **无需数据库 + `SIGHUP` 热重载**：
   - 已信任的**申请端** `Ed25519` 公钥白名单直接写在 `relay.toml` 中（类似 SSH `authorized_keys`）；**无需登记任何审批端（手机/浏览器）设备**。
   - 支持 `SIGHUP` 热重载 `relay.toml`（或直接毫秒级重启进程），同时支持 `OUTSIDER_RELAY_*` 环境变量覆盖。
@@ -371,36 +362,6 @@ stateDiagram-v2
 | `/approve/{name_slug}/{approve_token}` | `GET` | 路径高熵能力令牌（可前置 Cloudflare Access） | 下发内嵌的静态审批 HTML 页面 |
 | `/healthz` | `GET` | 无 | 健康检查 |
 
-#### 核心数据结构示例
-
-**创建请求（`POST /v1/requests`）**：
-```json
-{
-  "v": 1,
-  "id_pk": "<base64url-encoded-32-byte-ed25519-public-key>",
-  "pk_req": "<base64url-encoded-32-byte-x25519-public-key>",
-  "request_ts": 1795693200,
-  "ttl_secs": 120,
-  "request_nonce": "<base64url-encoded-16-byte-random-nonce>",
-  "context": {
-    "name": "prod-db",
-    "reason": "Run database migration",
-    "command_summary": "psql -h db.prod -U admin -d app -f migrate.sql"
-  },
-  "sig": "<base64url-encoded-64-byte-ed25519-signature>"
-}
-```
-
-**批准提交（`POST /v1/approve/{approve_token}`）**：
-```json
-{
-  "v": 1,
-  "epk": "<base64url-encoded-32-byte-x25519-ephemeral-public-key>",
-  "nonce": "<base64url-encoded-12-byte-nonce>",
-  "ciphertext": "<base64url-encoded-aes256gcm-ciphertext-with-tag>"
-}
-```
-
 ### 4.5 统一通知抽象（`shoutrrr` + `webhook`）
 
 中转端定义极简 Go 单向推送接口：
@@ -411,195 +372,75 @@ type Notifier interface {
 }
 ```
 
-配置层仅暴露 **2 种标准 `type`**，不做任何特定平台特化逻辑：
-
-1. **`type = "shoutrrr"`**：直接调用官方 Go `shoutrrr` 库发送通知，一行标准 URL 开箱支持 Telegram、Bark、ntfy、Pushover、Gotify、Slack、Discord、Teams、Matrix、SMTP 等 20+ 渠道。
-2. **`type = "webhook"`**：可模板化通用 HTTP 通知，支持自定义 `url`、`method`（默认 `POST`）、`headers`、`body_template`（占位变量：`{{url}}`、`{{device}}`、`{{secret_name}}`、`{{reason}}`、`{{command}}`、`{{ttl_secs}}`），零代码接入飞书、钉钉、企业微信或任何私有接口：
-
-```toml
-[[notifiers]]
-type = "shoutrrr"
-url = "telegram://123456:ABC-DEF...@telegram?chats=987654321"
-
-[[notifiers]]
-type = "webhook"
-url = "https://open.feishu.cn/open-apis/bot/v2/hook/xxx"
-headers = { Content-Type = "application/json" }
-body_template = '{"msg_type":"text","content":{"text":"[Outsider] {{device}} 请求 {{secret_name}}\n原因: {{reason}}\n审批: {{url}}"}}'
-```
-
-- **精简通知模式（`redact_notification_metadata = true`）**：开启后发给第三方 Notifier 的内容仅包含审批 URL（隐藏密钥名、申请理由与命令摘要），防止第三方推送平台窥探敏感元数据。
+配置层仅暴露 **2 种标准 `type`**（`shoutrrr` 与 `webhook`），并支持 `redact_notification_metadata = true` 精简通知模式。
 
 ### 4.6 安全防护、限流与 Cloudflare Access 适配
 
-- **推荐网关层保护（Cloudflare Zero Trust Access）**：
-  - 路由天然按角色分离，可直接用 Cloudflare Access（Email OTP）零代码保护批准端：
-    - **加 Email OTP 保护**：`/approve/*` 和 `/v1/approve/*`
-    - **设为 Bypass 放行**：`/v1/requests` 和 `/v1/requests/*`（已由申请端 `Ed25519` 签名鉴权）
-  - 开启后，即使 Notifier 完全不可信或审批链接意外泄露，未通过本人邮箱验证者也无法拉取或伪造提交密文。
-- **防通知轰炸与防重放**：按申请端 `id_pk` 限制最大同时 `PENDING` 会话数（默认 3）与滑动窗口速率限制（如每分钟最多 10 次）；内存维护 60 秒 `seen_nonces` 集合拦截重放请求。
-- **零日志泄露**：HTTP Access Log 强制脱敏 URL 路径中的 `approve_token` 与 `session_id`，且绝不记录请求体与响应体。
-- **定时清道夫（Reaper）**：后台 goroutine 每 5 秒扫描过期会话与过期 nonce 并清零释放。
+- **推荐网关层保护（Cloudflare Zero Trust Access）**：`/approve/*` 与 `/v1/approve/*` 启用 Email OTP 保护；`/v1/requests` 与 `/v1/requests/*` 设为 Bypass（已由 `Ed25519` 签名鉴权）。
+- **防通知轰炸与防重放**：按申请端 `id_pk` 限制最大同时 `PENDING` 会话数（默认 3）与滑动窗口速率限制（每分钟最多 10 次）；内存维护 60 秒 `seen_nonces` 集合拦截重放请求。
+- **零日志泄露与定时清道夫**：HTTP Access Log 脱敏 `approve_token` 与 `session_id`；后台 goroutine 每 5 秒扫描过期会话与过期 nonce 并清零释放。
 
 ---
 
 ## 5. 批准端设计（内嵌 Web UI + 密码管理器自动填充）
 
-批准端是一个由 Go `embed.FS` 直接内嵌进中转端的**零第三方脚本依赖极简单页应用（SPA）**，核心聚焦「**浏览器端 TOFU 公钥验签**」与「**让 Bitwarden / 1Password / Apple Passwords 无缝弹出并精准匹配密钥**」。首期采用**语义化原生 HTML + 极低 CSS（无视觉设计，仅保基本可读与布局）**，后续再独立做视觉美化。
+批准端是由 Go `embed.FS` 直接内嵌进中转端的**零第三方脚本依赖极简单页应用（SPA）**，采用语义化原生 HTML + 极低 CSS，核心聚焦：
 
-### 5.1 浏览器端 TOFU（首次信任并本地保存申请端公钥）
-
-审批端不从中转端自动拉取信任列表，浏览器依赖本地 `localStorage`（`outsider_trusted_clients_v1`）做本地信任判定：
-
-1. **前置密码学验签**：打开页面后，前端立即按长度前缀二进制编码重算 `context_hash`，并用 `window.crypto.subtle`（原生 `Ed25519`）验证 `sig`。验签失败直接阻断并禁用提交按钮。
-2. **三种 TOFU 信任状态（同屏无跳转）**：
-   - **已信任设备**（`id_pk` 已存在于浏览器本地白名单）：显示 `✓ 已验证信任设备：<设备名>`，直接启用「加密并发送」按钮。
-   - **首次遇到的新设备**（本地未保存此 `id_pk`）：在表单上方内联显示首次信任提示，展示设备名与 8 位公钥指纹（如 `7K4M-9P2X`），提供一键 **「信任并继续」** 按钮（点击即保存 `(id_pk, 设备名, 首次信任时间)` 到浏览器本地并原地解锁下方发送按钮）。
-   - **同名设备公钥突变（高危告警）**：本地已保存名为 `devbox-01` 的公钥 `id_pk_old`，而本次请求的设备名仍为 `devbox-01` 但公钥变为 `id_pk_new`——页面弹出明确告警并锁死提交按钮，必须由用户主动在设备管理列表移除旧公钥后才可重新信任。
-3. **本地设备管理**：使用原生 `<details>` 折叠面板，支持查看与移除浏览器本地已信任的申请端公钥（纯本地操作）。
-
-> **移动端浏览器存储提示**：`localStorage` 按浏览器 Origin 隔离（例如 iOS 上应用内置 `SFSafariViewController` 与外部 Safari 存储独立，但各自内部多次打开均持久共享）。建议平时固定用同一种方式打开审批链接，首次信任一次即可长期免核对。
-
-### 5.2 密码管理器路径前缀 URI 匹配设计
-
-统一采用基于密钥名 slug 与高熵能力令牌的极简路径（无 Query 参数、零额外 DNS 配置）：
-
-```text
-https://relay.example.com/approve/<name_slug>/<approve_token>
-```
-
-例如：`https://relay.example.com/approve/github-pat/a9f3k8m2x7...`
-
-- **Bitwarden 精准匹配**：对应条目的 URI 设为 `https://relay.example.com/approve/github-pat/`，并将匹配规则设为 **「开头为（Starts with）」**，打开页面即可精准只弹出该密钥。
-- **兜底便捷体验**：
-  - 审批页顶部提供 `name` 的**一键复制搜索词**按钮，方便直接复用 Vault 中已有的网站条目。
-  - 输入框旁提供 **「粘贴」** 按钮与 **单行/多行切换**（`<input type="password">` ↔ `<textarea>`），方便从 Bitwarden 安全笔记或剪贴板一键填入多行私钥。
-
-> **能力路径 `/approve/<name_slug>/<approve_token>` 的优势**：
-> 1. `pk_req` 已由 `Ed25519` 签名与浏览器 TOFU 保护，无需放入 URL；
-> 2. 路径天然 100% 穿越 Cloudflare Access 邮箱验证重定向，首次验权一步直达；
-> 3. 两端权限严格隔离（批准端仅有 `approve_token`，公开 `session_id` 由 `GET /v1/approve/{approve_token}` 下发供计算 `AAD`）；前端加载后调用 `history.replaceState` 擦除地址栏路径中的令牌。
-
-### 5.3 表单工程化、极简无设计与前端安全加固
-
-1. **真实 `<form>` 结构 + 阻断原生提交**：
-   ```html
-   <form id="secret-form" method="post" action="javascript:void(0)" autocomplete="on">
-     <!-- 保留只读 username 输入框并填入 name，显著提高 Bitwarden / iOS AutoFill / 1Password
-          识别登录表单并自动填充密码的成功率；该字段不打包进密文 -->
-     <input
-       id="username"
-       name="username"
-       type="text"
-       autocomplete="username"
-       value="prod-db"
-       readonly
-     />
-
-     <!-- 必须使用 current-password，绝不能使用 new-password（后者会触发密码生成器） -->
-     <input
-       id="secret"
-       name="password"
-       type="password"
-       autocomplete="current-password"
-       autofocus
-       required
-     />
-
-     <!-- 默认 disabled，待 Ed25519 验签与 TOFU 信任确认通过后才启用 -->
-     <button id="submit-btn" type="submit" disabled>加密并发送</button>
-   </form>
-   ```
-2. **严格的 Content-Security-Policy（CSP）**：
-   ```http
-   Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; form-action 'none'; base-uri 'none'
-   ```
-   其中 **`form-action 'none'`** 从浏览器内核层面杜绝任何原生 HTML 表单提交，确保明文绝不可能以明文 POST 离开浏览器。
-3. **极简交互与防误触（低 CSS 无设计原则）**：
-   - 使用语义化原生 HTML 元素（`<main>`、`<dl>`、`<form>`、`<details>`、`<pre>`）+ 极少量基础排版 CSS（居中最大宽度、合理间距、警示文字颜色），不做卡片动效或复杂视觉设计，后续再叠加主题样式。
-   - 清晰展示：**已验签设备状态**、**密钥名称**、**申请理由**、**目标命令摘要**、**剩余倒计时（秒）**。
-   - 一旦 TTL 过期、已发送或申请端主动取消，表单控件置为 `disabled` 并提示原因；不批准的请求直接关闭页面等待 TTL 自动过期即可。
-   - 点击「加密并发送」后：执行 WebCrypto 加密 -> 发送密文 -> 立即清空输入框与 JS 变量 -> 显示「已加密发送，可安全关闭此页面」。
+1. **浏览器端前置 `Ed25519` 验签 + 本地 TOFU 信任表**（`localStorage` `outsider_trusted_clients_v1`；支持首次点击「信任并继续」、同名公钥突变红警阻断、`<details>` 本地设备查看与移除）。
+2. **路径前缀 `/approve/<name_slug>/<approve_token>` 匹配密码管理器**（加载后通过 `history.replaceState` 抹去地址栏 token，保留 `/approve/<name_slug>/` 供 Bitwarden/1Password/Apple Passwords 精准自动填充）。
+3. **按需零依赖 `age` 私钥生成**：仅当已签名 `context.command_summary` 以 `[sops:init ` 或 `[register-sops-key] ` 开头时显示「生成新 age 私钥」按钮；采用浏览器原生 `crypto.getRandomValues(32)` + 纯 JS BIP-173 Bech32 编码生成标准 `AGE-SECRET-KEY-1...`，并强制勾选「我已将生成的私钥保存到密码管理器」后才解锁提交。
+4. **严格 CSP**：`default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; form-action 'none'; base-uri 'none'`。
 
 ---
 
-## 6. 项目代码架构（Monorepo）
+## 6. 项目代码架构（统一 Go Monorepo）
 
-采用多语言 Monorepo 组织：**Rust 申请端 CLI** + **Go 中转端 Relay（内嵌 Web 批准端）** + **跨语言协议测试向量** + **文档与 Skill 打包脚本**：
+采用统一 Go Monorepo 组织（Go 单一工具链同时构建 CLI 与 Relay）：
 
 ```text
 Outsider/
-├── .gitignore                         # 忽略本地运行时注入的 /skills/ 及构建产物
-├── go.mod                             # Go 模块根（供 relay 零拷贝 embed web/）
+├── go.mod                             # 统一 Go 模块根 (module outsider)
+├── go.sum
 ├── pyproject.toml                     # 统一 uvx 包（同时提供 outsider 与 outsider-relay）
+├── cmd/
+│   ├── outsider/main.go               # CLI 入口（askpass-helper、进程加固、子命令分发）
+│   └── outsider-relay/main.go         # Relay 入口（relay.toml、SIGHUP 热重载、优雅停机）
+├── internal/
+│   ├── proto/                         # CLI 与 Relay 共享协议单源（context_hash、Ed25519、X25519+HKDF+AES-GCM、API DTO）
+│   ├── sopsage/                       # 轻量纯 Go SOPS v3 (age) 引擎（与官方 sops 双向互通）
+│   ├── cli/                           # CLI 实现（init/id/doctor/name/sops/run、5 种交接与进程加固）
+│   └── relay/                         # Relay 实现（config/session/server/notifier）
+├── web/                               # 批准端零依赖静态网页（构建时 embed 至 relay）
+│   ├── embed.go
+│   ├── index.html
+│   ├── app.js                         # WebCrypto Ed25519/X25519 + TOFU + 按需 BIP-173 age keygen
+│   ├── app.test.mjs                   # Node 原生测试（含 protocol/test-vectors.json 与 age keygen）
+│   └── style.css
+├── cli/                               # 独立 uvx 包: outsider（仅需 Go）
+│   ├── pyproject.toml
+│   └── _pep517.py
+├── relay/                             # 独立 uvx 包: outsider-relay（仅需 Go）
+│   ├── pyproject.toml
+│   ├── _pep517.py
+│   └── relay.example.toml
+├── protocol/
+│   └── test-vectors.json              # Go / WebCrypto JS 跨语言共享一致性测试向量
 ├── docs/
 │   ├── design.md                      # 本文档
+│   ├── go-cli-sops-design.md          # Go CLI 重写与原生 SOPS 集成详细设计
 │   ├── SKILL.md                       # Agent Skill 指令规范模板
 │   └── references/
-│       └── handoff-examples.md        # 常见工具交接命令速查
-├── scripts/
-│   ├── package-skill.sh               # 从 docs/ 组装纯 uvx 跨平台 outsider-skill.tar.gz
-│   ├── pep517_backend.py              # 零依赖 PEP 517 后端（将原生二进制打入 .data/scripts/）
-│   └── build-wheels.sh                # 构建独立 outsider 与 outsider-relay 原生 wheel
-├── protocol/
-│   └── test-vectors.json              # Rust / Go / WebCrypto JS 三端共享一致性测试向量
-├── cli/                               # 申请端 Rust 项目 (outsider)
-│   ├── pyproject.toml                 # 独立 uvx 包: outsider（仅需 Rust）
-│   ├── _pep517.py
-│   ├── Cargo.toml
-│   └── src/
-│       ├── main.rs                    # clap 参数解析与子命令分发 (init/id/doctor/run)
-│       ├── proto/                     # 协议实现模块
-│       │   ├── mod.rs
-│       │   ├── crypto.rs              # X25519 + HKDF-SHA256 + AES-256-GCM + Zeroize
-│       │   ├── identity.rs            # Ed25519 签名/验签、8 位公钥指纹
-│       │   ├── context.rs             # 定长前缀二进制 context_hash、name slug
-│       │   └── api.rs                 # Request/Response/Envelope/Status DTO
-│       ├── config.rs                  # config.toml 与 identity.key (0600) 加载与校验
-│       ├── client.rs                  # 请求签名、HTTPS 客户端、分片长轮询、信号取消
-│       ├── handoff/                   # 密钥交接实现模块
-│       │   ├── mod.rs
-│       │   ├── env.rs
-│       │   ├── stdin.rs
-│       │   ├── file.rs                # /dev/shm 0600 临时文件 + 覆写清理
-│       │   ├── askpass.rs             # SSH/SUDO/GIT_ASKPASS 内部助手与一次性 IPC
-│       │   └── arg.rs
-│       └── redact.rs                  # 子进程 stdout/stderr 流式密钥脱敏
-├── relay/                             # 中转端 Go 项目 (outsider-relay)
-│   ├── pyproject.toml                 # 独立 uvx 包: outsider-relay（仅需 Go）
-│   ├── _pep517.py
-│   ├── cmd/
-│   │   └── outsider-relay/
-│   │       └── main.go                # 服务启动、relay.toml 加载、SIGHUP 热重载、优雅停机
-│   └── internal/
-│       ├── config/                    # relay.toml 解析、环境变量覆盖
-│       ├── crypto/                    # 定长前缀 context_hash、Ed25519 白名单验签
-│       ├── session/                   # 内存会话 Store (sync.Mutex + chan 唤醒)、seen_nonces、Reaper
-│       ├── server/                    # net/http 路由、安全响应头 (CSP/no-store)、限流、embed 静态页
-│       └── notifier/                  # Notifier 单向推送接口、shoutrrr、webhook 模板
-└── web/                               # 批准端零依赖静态网页（构建时 embed 至 relay）
-    ├── index.html                     # 语义化原生 HTML
-    ├── app.js                         # WebCrypto Ed25519 验签 + TOFU 管理 + X25519 加密 + 表单控制
-    └── style.css                      # 极简低 CSS 基础排版（无视觉设计，后续可扩展）
+│       └── handoff-examples.md        # 交接与 SOPS 命令速查
+└── scripts/
+    ├── package-skill.sh               # 从 docs/ 组装纯 uvx 跨平台 outsider-skill.tar.gz
+    ├── pep517_backend.py              # 零依赖 PEP 517 后端（将 Go 静态二进制打入 .data/scripts/）
+    └── build-wheels.sh                # 构建独立 outsider 与 outsider-relay 原生 wheel
 ```
 
 ### 核心依赖
 
-- **申请端（Rust）**：
-  - CLI 与网络：`clap`、`tokio`、`reqwest`（`rustls-tls` 避免 OpenSSL 动态链接问题）、`serde` / `serde_json` / `toml`
-  - 加密与签名：`x25519-dalek`、`ed25519-dalek`、`hkdf`、`sha2`、`aes-gcm`、`rand`、`zeroize`、`base64`
-- **中转端（Go）**：
-  - 标准库：`net/http`、`embed`、`crypto/ed25519`、`crypto/sha256`、`crypto/rand`、`encoding/base64`、`log/slog`、`text/template`、`os/signal`
-  - 外部库（仅 2 个）：`github.com/nicholas-fedor/shoutrrr`、`github.com/BurntSushi/toml`
+- **Go 模块（CLI + Relay 共享）**：
+  - 标准库：`crypto/ed25519`、`crypto/ecdh`、`crypto/hkdf`、`crypto/aes`、`crypto/cipher`、`crypto/sha256`、`crypto/sha512`、`net/http`、`embed`、`syscall`
+  - 外部库：`filippo.io/age`、`gopkg.in/yaml.v3`、`github.com/BurntSushi/toml`、`github.com/spf13/pflag`、`github.com/nicholas-fedor/shoutrrr`
 - **分发与打包（`uvx`）**：
-  - 零外部构建依赖的纯标准库 PEP 517 后端（`scripts/pep517_backend.py`），将原生编译的 `outsider` 与 `outsider-relay` 二进制直接写入 wheel 的 `.data/scripts/`（保持原生进程模型、`current_exe()` 自调用及 `SIGHUP`/`SIGTERM` 信号投递）；同时提供独立包（`cli/` → `outsider`，`relay/` → `outsider-relay`）与仓库根目录统一包（`pyproject.toml`）。
-
----
-
-## 7. 核心实现清单
-
-1. **`protocol/test-vectors.json`**：固化定长前缀二进制 `context_hash`、`Ed25519` 签名输入与签名、`X25519 + HKDF-SHA256 + AES-256-GCM` 密文与 `AAD`、以及 8 位公钥指纹测试向量，供 Rust、Go、WebCrypto 三端自动化回归验证。
-2. **`relay/`（Go 中转端）**：实现无数据库 `relay.toml` 白名单验签（支持 `SIGHUP` 热重载与环境变量覆盖）与 nonce 防重放、纯内存会话状态机（TTL 自动过期）与 `chan` 毫秒级唤醒、25 秒分片长轮询、`[[notifiers]]`（官方 `shoutrrr` + 可模板化 `webhook` + 可选 `redact_notification_metadata`），以及 `embed.FS` 内嵌静态审批页服务。
-3. **`web/`（批准端）**：采用语义化原生 HTML + 极低 CSS（无视觉设计，后续再美化），实现原生 WebCrypto `Ed25519` 验签 + 浏览器本地 TOFU 信任表（同屏首次点击「信任并继续」保存、同名公钥突变告警阻断、原生 `<details>` 本地设备查看/移除）、表单与路径前缀 `/approve/<name_slug>/<approve_token>`（Bitwarden `autocomplete="current-password"`、单行/多行切换、粘贴按钮、纯文本倒计时）、WebCrypto 原生 `X25519` 加密与严格 CSP（`style-src 'self'; form-action 'none'`）。
-4. **`cli/`（Rust 申请端）**：实现 `init`（直接输出可粘贴 `relay.toml` 片段）、`id`、`doctor`、`run`（由 `--name` 自动生成 URL slug 与 `stderr` 状态提示）及 5 种交接模式（`env`、`stdin`、`file`、`askpass`、`arg`）、`--redact` 子进程输出流式脱敏、内存 `zeroize` 与信号清理。
-5. **`docs/SKILL.md`、`docs/references/` 与 `scripts/package-skill.sh`**：编写默认基于 GitHub `main` 分支 `uvx` 调用的 Agent Skill 规范、交接示例文档与跨平台打包脚本。
+  - 零外部构建依赖的纯标准库 PEP 517 后端（`scripts/pep517_backend.py`），将 `CGO_ENABLED=0` 编译的 Go 二进制直接写入 wheel 的 `.data/scripts/`；支持独立包（`cli/` → `outsider`，`relay/` → `outsider-relay`）与根目录统一包（`pyproject.toml`）。

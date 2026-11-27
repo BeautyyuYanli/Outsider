@@ -2,7 +2,6 @@
 /skills/
 
 # Build & packaging outputs
-/cli/target/
 /dist/
 **/__pycache__/
 *.pyc

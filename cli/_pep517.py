@@ -15,6 +15,15 @@ def _load_core():
     raise RuntimeError("cannot locate outsider PEP 517 backend")
 
 
+def _repo_root() -> Path:
+    here = Path(__file__).resolve().parent
+    if (here / "go.mod").is_file():
+        return here
+    if (here.parent / "go.mod").is_file():
+        return here.parent
+    return here
+
+
 def get_requires_for_build_wheel(config_settings=None):
     return []
 
@@ -30,18 +39,22 @@ def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):
 def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
     core = _load_core()
     here = Path(__file__).resolve().parent
-    return core.build_wheel_for_targets(here, here, ["cli"], wheel_directory)
+    return core.build_wheel_for_targets(here, _repo_root(), ["cli"], wheel_directory)
 
 
 def build_sdist(sdist_directory, config_settings=None):
     core = _load_core()
     here = Path(__file__).resolve().parent
+    repo = _repo_root()
     entries = [
         (here / "pyproject.toml", "pyproject.toml"),
         (here / "_pep517.py", "_pep517.py"),
-        (here / "Cargo.toml", "Cargo.toml"),
-        (here / "Cargo.lock", "Cargo.lock"),
-        (here / "src", "src"),
+        (repo / "go.mod", "go.mod"),
+        (repo / "go.sum", "go.sum"),
+        (repo / "cmd" / "outsider", "cmd/outsider"),
+        (repo / "internal" / "proto", "internal/proto"),
+        (repo / "internal" / "sopsage", "internal/sopsage"),
+        (repo / "internal" / "cli", "internal/cli"),
     ]
     return core.build_sdist_for_project(
         project_dir=here,

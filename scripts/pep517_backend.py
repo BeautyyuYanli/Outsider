@@ -1,8 +1,8 @@
 """Minimal zero-dependency PEP 517 build backend for Outsider native binaries.
 
-Packages compiled Rust (`outsider`) and/or Go (`outsider-relay`) executables
-directly into PEP 427 `.data/scripts/` so `uvx` runs native binaries with zero
-Python wrapper overhead and clean signal/exec semantics.
+Packages compiled Go (`outsider` and/or `outsider-relay`) executables directly
+into PEP 427 `.data/scripts/` so `uvx` runs native binaries with zero Python
+wrapper overhead and clean signal/exec semantics.
 """
 
 from __future__ import annotations
@@ -46,60 +46,29 @@ def _platform_tag() -> str:
 
 def _exe_suffix() -> str:
     goos = os.environ.get("GOOS", "").strip().lower()
-    cargo_target = os.environ.get("OUTSIDER_CARGO_TARGET", "").strip().lower()
-    if goos == "windows" or "windows" in cargo_target:
+    if goos == "windows":
         return ".exe"
-    if not goos and not cargo_target and sys.platform == "win32":
+    if not goos and sys.platform == "win32":
         return ".exe"
     return ""
 
 
-def _build_rust_cli(repo_root: Path) -> Path:
-    if shutil.which("cargo") is None:
-        raise RuntimeError(
-            "cargo (Rust toolchain) is required to build `outsider` from source. "
-            "If you only need `outsider-relay`, use `#subdirectory=relay`."
-        )
-    cli_dir = repo_root / "cli" if (repo_root / "cli" / "Cargo.toml").is_file() else repo_root
-    manifest = cli_dir / "Cargo.toml"
-    if not manifest.is_file():
-        raise RuntimeError(f"Cargo.toml not found under {repo_root}")
-
-    cmd = ["cargo", "build", "--release", "--manifest-path", str(manifest)]
-    target = os.environ.get("OUTSIDER_CARGO_TARGET", "").strip()
-    if target:
-        cmd.extend(["--target", target])
-    subprocess.run(cmd, cwd=str(cli_dir), check=True)
-
-    ext = _exe_suffix()
-    cargo_target_dir = os.environ.get("CARGO_TARGET_DIR", "").strip()
-    target_root = Path(cargo_target_dir) if cargo_target_dir else cli_dir / "target"
-    if target:
-        bin_path = target_root / target / "release" / f"outsider{ext}"
-    else:
-        bin_path = target_root / "release" / f"outsider{ext}"
-    if not bin_path.is_file():
-        raise RuntimeError(f"built outsider binary not found at {bin_path}")
-    return bin_path
-
-
-def _build_go_relay(repo_root: Path, out_dir: Path) -> Path:
+def _build_go_binary(repo_root: Path, out_dir: Path, bin_name: str, pkg_path: str) -> Path:
     if shutil.which("go") is None:
         raise RuntimeError(
-            "go (Go toolchain) is required to build `outsider-relay` from source. "
-            "If you only need `outsider`, use `#subdirectory=cli`."
+            f"go (Go toolchain) is required to build `{bin_name}` from source."
         )
     if not (repo_root / "go.mod").is_file():
         raise RuntimeError(f"go.mod not found under {repo_root}")
 
     ext = _exe_suffix()
-    out_path = out_dir / f"outsider-relay{ext}"
+    out_path = out_dir / f"{bin_name}{ext}"
     env = os.environ.copy()
     env.setdefault("CGO_ENABLED", "0")
-    cmd = ["go", "build", "-trimpath", "-o", str(out_path), "./relay/cmd/outsider-relay"]
+    cmd = ["go", "build", "-trimpath", "-ldflags=-s -w", "-o", str(out_path), pkg_path]
     subprocess.run(cmd, cwd=str(repo_root), env=env, check=True)
     if not out_path.is_file():
-        raise RuntimeError(f"built outsider-relay binary not found at {out_path}")
+        raise RuntimeError(f"built {bin_name} binary not found at {out_path}")
     return out_path
 
 
@@ -162,9 +131,15 @@ def build_wheel_for_targets(
         ext = _exe_suffix()
 
         if "cli" in targets:
-            binaries.append((f"outsider{ext}", _build_rust_cli(repo_root)))
+            binaries.append((
+                f"outsider{ext}",
+                _build_go_binary(repo_root, tmp_path, "outsider", "./cmd/outsider"),
+            ))
         if "relay" in targets:
-            binaries.append((f"outsider-relay{ext}", _build_go_relay(repo_root, tmp_path)))
+            binaries.append((
+                f"outsider-relay{ext}",
+                _build_go_binary(repo_root, tmp_path, "outsider-relay", "./cmd/outsider-relay"),
+            ))
 
         records: list[str] = []
         with zipfile.ZipFile(wheel_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
@@ -285,8 +260,8 @@ def build_sdist(sdist_directory, config_settings=None):
         "pyproject.toml",
         "go.mod",
         "go.sum",
-        "cli",
-        "relay",
+        "cmd",
+        "internal",
         "web",
         "protocol",
         "scripts/pep517_backend.py",

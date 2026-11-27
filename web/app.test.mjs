@@ -9,7 +9,7 @@ const vectors = JSON.parse(
   fs.readFileSync(path.resolve(__dirname, "../protocol/test-vectors.json"), "utf8")
 );
 
-// Execute web/app.js in Node (document is undefined, so only pure crypto/TOFU hooks register).
+// Execute web/app.js in Node (document is undefined, so only pure crypto/TOFU/keygen hooks register).
 await import("./app.js");
 const api = globalThis.__OUTSIDER_CRYPTO__;
 assert.ok(api, "app.js should expose __OUTSIDER_CRYPTO__");
@@ -113,4 +113,34 @@ test("parseApprovePath extracts name_slug and approve_token", () => {
     approveToken: "tok_12345",
   });
   assert.equal(api.parseApprovePath("/approve/only-one"), null);
+});
+
+test("generateAgeSecretKey encodes valid BIP-173 age X25519 secret keys", () => {
+  const k1 = api.generateAgeSecretKey();
+  const k2 = api.generateAgeSecretKey();
+  assert.equal(k1.length, 74);
+  assert.match(k1, /^AGE-SECRET-KEY-1[QPZRY9X8GF2TVDW0S3JN54KHCE6MUA7L]{58}$/);
+  assert.notEqual(k1, k2);
+
+  // Deterministic BIP-173 vectors (verified against filippo.io/age in Go tests).
+  const zeroKey = api.generateAgeSecretKey(new Uint8Array(32));
+  assert.equal(zeroKey, "AGE-SECRET-KEY-1QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ8H00W3");
+
+  const seq = new Uint8Array(32);
+  for (let i = 0; i < 32; i++) seq[i] = i + 1;
+  assert.equal(
+    api.generateAgeSecretKey(seq),
+    "AGE-SECRET-KEY-1QYPQXPQ9QCRSSZG2PVXQ6RS0ZQG3YYC5Z5TPWXQERGD3C8G7RUSQGPQYEE"
+  );
+
+  assert.throws(() => api.generateAgeSecretKey(new Uint8Array(16)));
+});
+
+test("isSopsKeygenCommand matches only SOPS enrollment commands", () => {
+  assert.equal(api.isSopsKeygenCommand("[sops:init ~/.secrets.enc.yaml]"), true);
+  assert.equal(api.isSopsKeygenCommand("[register-sops-key] sops-main"), true);
+  assert.equal(api.isSopsKeygenCommand("[register-name] github-pat"), false);
+  assert.equal(api.isSopsKeygenCommand("[sops:set ~/.secrets.enc.yaml] GH_TOKEN"), false);
+  assert.equal(api.isSopsKeygenCommand("gh auth status"), false);
+  assert.equal(api.isSopsKeygenCommand(""), false);
 });

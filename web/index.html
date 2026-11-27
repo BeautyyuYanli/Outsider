@@ -74,8 +74,20 @@
           ></textarea>
         </p>
 
+        <div id="age-save-box" class="status-warn" hidden>
+          <p>
+            已生成新的 age 私钥（浏览器本地 CSPRNG），请先复制到密码管理器妥善保存后再提交。
+            <button type="button" id="copy-age-btn">复制生成的私钥</button>
+          </p>
+          <label class="checkbox-label">
+            <input type="checkbox" id="age-saved-checkbox">
+            我已将生成的私钥保存到密码管理器
+          </label>
+        </div>
+
         <p class="actions">
           <button type="button" id="paste-btn">粘贴</button>
+          <button type="button" id="gen-age-btn" hidden>生成新 age 私钥</button>
           <button type="button" id="toggle-mode-btn">切换为多行输入</button>
           <button type="submit" id="submit-btn" disabled>加密并发送</button>
         </p>

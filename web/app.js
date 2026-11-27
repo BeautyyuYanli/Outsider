@@ -3,6 +3,8 @@
 
   const STORAGE_KEY = "outsider_trusted_clients_v1";
   const BASE32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  const BECH32_CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
+  const BECH32_GEN = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3];
   const textEncoder = new TextEncoder();
 
   function concatBytes(...parts) {
@@ -38,6 +40,84 @@
       out[i] = binary.charCodeAt(i);
     }
     return out;
+  }
+
+  function bech32Polymod(values) {
+    let chk = 1;
+    for (const v of values) {
+      const top = chk >>> 25;
+      chk = ((chk & 0x1ffffff) << 5) ^ v;
+      for (let i = 0; i < 5; i++) {
+        if ((top >>> i) & 1) {
+          chk ^= BECH32_GEN[i];
+        }
+      }
+    }
+    return chk >>> 0;
+  }
+
+  function bech32HrpExpand(hrp) {
+    const out = [];
+    for (let i = 0; i < hrp.length; i++) out.push(hrp.charCodeAt(i) >>> 5);
+    out.push(0);
+    for (let i = 0; i < hrp.length; i++) out.push(hrp.charCodeAt(i) & 31);
+    return out;
+  }
+
+  function bech32CreateChecksum(hrp, data5) {
+    const values = bech32HrpExpand(hrp).concat(data5, [0, 0, 0, 0, 0, 0]);
+    const polymod = bech32Polymod(values) ^ 1; // BIP-173 Bech32 constant (1), as required by age v1.
+    const out = [];
+    for (let i = 0; i < 6; i++) {
+      out.push((polymod >>> (5 * (5 - i))) & 31);
+    }
+    return out;
+  }
+
+  function convertBits(bytes, fromBits, toBits, pad) {
+    let acc = 0;
+    let bits = 0;
+    const maxv = (1 << toBits) - 1;
+    const out = [];
+    for (const b of bytes) {
+      acc = (acc << fromBits) | b;
+      bits += fromBits;
+      while (bits >= toBits) {
+        bits -= toBits;
+        out.push((acc >>> bits) & maxv);
+      }
+    }
+    if (pad && bits > 0) {
+      out.push((acc << (toBits - bits)) & maxv);
+    }
+    return out;
+  }
+
+  function generateAgeSecretKey(randomBytesOverride) {
+    let raw;
+    if (randomBytesOverride !== undefined) {
+      raw = randomBytesOverride instanceof Uint8Array
+        ? new Uint8Array(randomBytesOverride)
+        : new Uint8Array(randomBytesOverride);
+      if (raw.length !== 32) {
+        throw new Error("age secret key requires exactly 32 random bytes");
+      }
+    } else {
+      raw = crypto.getRandomValues(new Uint8Array(32));
+    }
+    const hrp = "age-secret-key-";
+    const data5 = convertBits(raw, 8, 5, true);
+    const checksum = bech32CreateChecksum(hrp, data5);
+    raw.fill(0);
+    let encoded = `${hrp}1`;
+    for (const v of data5) encoded += BECH32_CHARSET[v];
+    for (const v of checksum) encoded += BECH32_CHARSET[v];
+    return encoded.toUpperCase();
+  }
+
+  function isSopsKeygenCommand(cmdSummary) {
+    if (typeof cmdSummary !== "string") return false;
+    return cmdSummary.startsWith("[sops:init ") || cmdSummary.startsWith("[register-sops-key] ");
   }
 
   function encodeStr(s) {
@@ -250,10 +330,12 @@
     };
   }
 
-  // Expose pure protocol/TOFU functions for automated Node.js verification.
+  // Expose pure protocol/TOFU/keygen functions for automated Node.js verification.
   globalThis.__OUTSIDER_CRYPTO__ = {
     b64uEncode,
     b64uDecode,
+    generateAgeSecretKey,
+    isSopsKeygenCommand,
     encodeContextBytes,
     computeContextHash,
     buildSignInput,
@@ -289,6 +371,10 @@
     const secretLabel = document.getElementById("secret-label");
     const copyNameBtn = document.getElementById("copy-name-btn");
     const pasteBtn = document.getElementById("paste-btn");
+    const genAgeBtn = document.getElementById("gen-age-btn");
+    const ageSaveBox = document.getElementById("age-save-box");
+    const copyAgeBtn = document.getElementById("copy-age-btn");
+    const ageSavedCheckbox = document.getElementById("age-saved-checkbox");
     const toggleModeBtn = document.getElementById("toggle-mode-btn");
     const submitBtn = document.getElementById("submit-btn");
     const secretForm = document.getElementById("secret-form");
@@ -299,6 +385,7 @@
 
     let activeState = null; // { approveToken, req, contextHash, pkReqBytes, fp, trusted, locked }
     let multilineMode = false;
+    let generatedAgeKey = null;
     let timerId = null;
 
     function showAlert(message, kind) {
@@ -312,12 +399,22 @@
       alertBox.textContent = "";
     }
 
+    function clearGeneratedAgeGuard() {
+      generatedAgeKey = null;
+      if (ageSaveBox) ageSaveBox.hidden = true;
+      if (ageSavedCheckbox) ageSavedCheckbox.checked = false;
+    }
+
     function lockForm(reasonText) {
       if (activeState) activeState.locked = true;
       submitBtn.disabled = true;
       secretSingle.disabled = true;
       secretMulti.disabled = true;
       pasteBtn.disabled = true;
+      if (genAgeBtn) genAgeBtn.disabled = true;
+      if (copyAgeBtn) copyAgeBtn.disabled = true;
+      if (ageSavedCheckbox) ageSavedCheckbox.disabled = true;
+      clearGeneratedAgeGuard();
       toggleModeBtn.disabled = true;
       trustBtn.hidden = true;
       if (timerId !== null) {
@@ -330,11 +427,24 @@
     }
 
     function updateSubmitEnabled() {
-      if (!activeState || activeState.locked) {
+      if (!activeState || activeState.locked || !activeState.trusted) {
         submitBtn.disabled = true;
         return;
       }
-      submitBtn.disabled = !activeState.trusted;
+      if (generatedAgeKey !== null && (!ageSavedCheckbox || !ageSavedCheckbox.checked)) {
+        submitBtn.disabled = true;
+        return;
+      }
+      submitBtn.disabled = false;
+    }
+
+    function syncGeneratedAgeGuardWithInput() {
+      if (generatedAgeKey === null) return;
+      const activeInput = multilineMode ? secretMulti : secretSingle;
+      if (activeInput.value !== generatedAgeKey) {
+        clearGeneratedAgeGuard();
+        updateSubmitEnabled();
+      }
     }
 
     function renderTrustedList() {
@@ -499,6 +609,10 @@
     ctxCommandEl.textContent = reqData.context.command_summary || "（无命令摘要）";
     usernameInput.value = reqData.context.name;
 
+    if (genAgeBtn && isSopsKeygenCommand(reqData.context.command_summary)) {
+      genAgeBtn.hidden = false;
+    }
+
     contextSection.hidden = false;
     formSection.hidden = false;
 
@@ -547,6 +661,44 @@
       }
     });
 
+    if (genAgeBtn) {
+      genAgeBtn.addEventListener("click", () => {
+        if (!activeState || activeState.locked) return;
+        if (multilineMode) {
+          toggleModeBtn.click();
+        }
+        const key = generateAgeSecretKey();
+        secretSingle.value = key;
+        generatedAgeKey = key;
+        if (ageSaveBox) ageSaveBox.hidden = false;
+        if (ageSavedCheckbox) ageSavedCheckbox.checked = false;
+        clearAlert();
+        updateSubmitEnabled();
+      });
+    }
+
+    if (copyAgeBtn) {
+      copyAgeBtn.addEventListener("click", async () => {
+        if (!generatedAgeKey) return;
+        try {
+          await navigator.clipboard.writeText(generatedAgeKey);
+          copyAgeBtn.textContent = "已复制私钥";
+          setTimeout(() => { copyAgeBtn.textContent = "复制生成的私钥"; }, 1500);
+        } catch {
+          showAlert("无法访问剪贴板，请手动复制输入框中的私钥。", "warn");
+        }
+      });
+    }
+
+    if (ageSavedCheckbox) {
+      ageSavedCheckbox.addEventListener("change", () => {
+        updateSubmitEnabled();
+      });
+    }
+
+    secretSingle.addEventListener("input", syncGeneratedAgeGuardWithInput);
+    secretMulti.addEventListener("input", syncGeneratedAgeGuardWithInput);
+
     toggleModeBtn.addEventListener("click", () => {
       multilineMode = !multilineMode;
       if (multilineMode) {
@@ -585,6 +737,7 @@
         }
         const target = multilineMode ? secretMulti : secretSingle;
         target.value = text;
+        syncGeneratedAgeGuardWithInput();
         clearAlert();
       } catch {
         showAlert("浏览器拒绝读取剪贴板，请直接在输入框内长按粘贴。", "warn");
@@ -594,6 +747,10 @@
     secretForm.addEventListener("submit", async (e) => {
       e.preventDefault();
       if (!activeState || activeState.locked || !activeState.trusted) return;
+      if (generatedAgeKey !== null && (!ageSavedCheckbox || !ageSavedCheckbox.checked)) {
+        showAlert("请先将生成的 age 私钥保存到密码管理器并勾选确认框。", "warn");
+        return;
+      }
 
       const activeInput = multilineMode ? secretMulti : secretSingle;
       let secretVal = activeInput.value;
