@@ -1,0 +1,10 @@
+[build-system]
+requires = []
+build-backend = "_pep517"
+backend-path = ["."]
+
+[project]
+name = "outsider-relay"
+version = "0.1.0"
+description = "Zero-knowledge in-memory relay with embedded Web UI for Outsider"
+requires-python = ">=3.11"

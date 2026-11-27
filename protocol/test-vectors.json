@@ -1,0 +1,74 @@
+{
+  "protocol_version": 1,
+  "slug_cases": [
+    {
+      "input": "DOCKER_PAT",
+      "expected": "docker-pat"
+    },
+    {
+      "input": "prod-db",
+      "expected": "prod-db"
+    },
+    {
+      "input": "  My API / Key! ",
+      "expected": "my-api-key"
+    },
+    {
+      "input": "密钥",
+      "expected": "secret"
+    },
+    {
+      "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  ],
+  "identity": {
+    "seed_hex": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+    "id_pk_b64u": "ebVWLo_mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ",
+    "id_fp": "6R2U-JT4C"
+  },
+  "context_vectors": [
+    {
+      "label": "basic-ascii",
+      "name": "prod-db",
+      "reason": "Run database migration",
+      "command_summary": "psql -h db.prod -U admin -d app -f migrate.sql",
+      "context_bytes_hex": "6f757473696465722d6374782d7631000000000770726f642d64620000001652756e206461746162617365206d6967726174696f6e0000002e7073716c202d682064622e70726f64202d552061646d696e202d6420617070202d66206d6967726174652e73716c",
+      "context_hash_hex": "14e3b9e0b65dc3054da5a8bae82cbf315f09ad669aedfd81b32e0be3880f49a8",
+      "context_hash_b64u": "FOO54LZdwwVNpai66Cy_MV8JrWaa7f2Bsy4L44gPSag"
+    },
+    {
+      "label": "unicode-and-empty",
+      "name": "DOCKER_PAT",
+      "reason": "发布镜像 v1.2.0",
+      "command_summary": "",
+      "context_bytes_hex": "6f757473696465722d6374782d7631000000000a444f434b45525f50415400000013e58f91e5b883e9959ce5838f2076312e322e3000000000",
+      "context_hash_hex": "ba79a6a7c7ad1f8fdbb888346b8b462a051dea8db3ffe5ded822648f43fb1a6d",
+      "context_hash_b64u": "unmmp8etH4_buIg0a4tGKgUd6o2z_-Xe2CJkj0P7Gm0"
+    }
+  ],
+  "request_signature": {
+    "context_label": "basic-ascii",
+    "id_pk_b64u": "ebVWLo_mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ",
+    "pk_req_b64u": "eaYx7t4b-cmPEgMs3q3Q56B5OY_HhriMyEbsia-FpRo",
+    "request_ts": 1795693200,
+    "ttl_secs": 120,
+    "request_nonce_b64u": "oKGio6SlpqeoqaqrrK2urw",
+    "sign_input_hex": "6f757473696465722d7265712d76310079b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad04966479a631eede1bf9c98f12032cdeadd0e7a079398fc786b88cc846ec89af85a51a14e3b9e0b65dc3054da5a8bae82cbf315f09ad669aedfd81b32e0be3880f49a8000000006b081a9000000078a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+    "sig_b64u": "CTACTXTeTrUL08d4d4CKzXy6WoKq5NL4ev-gRYmdAdayIVGTTViZdj1bYBXM5FFbh2vMda_934vuZmaREa-hCw"
+  },
+  "e2ee": {
+    "context_label": "basic-ascii",
+    "session_id": "sess_01J9EXAMPLE0000000000000",
+    "sk_req_hex": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+    "pk_req_b64u": "eaYx7t4b-cmPEgMs3q3Q56B5OY_HhriMyEbsia-FpRo",
+    "sk_epk_hex": "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+    "epk_b64u": "ST6C_HRGSlkmiBdiPSBTxeuOLMSpiLT-4XnsawENUx0",
+    "shared_secret_hex": "dcd77236231add34de0561c47859a65d304f2a8550e8df98df053cf5dfabea0b",
+    "aead_key_hex": "9b44440f7408d7956cdcec7cf072d26cc5b611008f69cbc949e74d95dcf4c50e",
+    "aad_hex": "6f757473696465722d763100736573735f30314a394558414d504c45303030303030303030303030300014e3b9e0b65dc3054da5a8bae82cbf315f09ad669aedfd81b32e0be3880f49a8",
+    "nonce_b64u": "wMHCw8TFxsfIycrL",
+    "plaintext_json": "{\"v\":1,\"secret\":\"s3cr3t-p@ssw0rd\\nline2\"}",
+    "ciphertext_b64u": "4HRXdSynzdknkXG2yZ0RYKXiXtCYrFi4IaAq-UwtZ76CFeMxKtEMuHMcBSrDSjcpdBw6DfP0ltuu"
+  }
+}

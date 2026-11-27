@@ -1,0 +1,21 @@
+public_base_url = "https://relay.example.com"
+listen_addr = "127.0.0.1:8080"
+
+# Optional: hide secret name, reason, and command summary from third-party notification channels
+redact_notification_metadata = false
+
+# Notification channels: type = "shoutrrr" or type = "webhook"
+[[notifiers]]
+type = "shoutrrr"
+url = "telegram://123456:ABC-DEF...@telegram?chats=987654321"
+
+# [[notifiers]]
+# type = "webhook"
+# url = "https://open.feishu.cn/open-apis/bot/v2/hook/xxx"
+# headers = { Content-Type = "application/json" }
+# body_template = '{"msg_type":"text","content":{"text":"[Outsider] {{device}} 请求 {{secret_name}}\n原因: {{reason}}\n审批: {{url}}"}}'
+
+# Paste the output of `outsider init` or `outsider id` here:
+[[trusted_clients]]
+name = "macbook-pro"
+public_key = "ebVWLo_mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ"

@@ -1,0 +1,10 @@
+[build-system]
+requires = []
+build-backend = "pep517_backend"
+backend-path = ["scripts"]
+
+[project]
+name = "outsider"
+version = "0.1.0"
+description = "End-to-end encrypted out-of-band secret handoff CLI and zero-knowledge relay"
+requires-python = ">=3.11"

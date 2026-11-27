@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Outsider 密钥审批</title>
+  <link rel="stylesheet" href="/assets/style.css">
+  <script defer src="/assets/app.js"></script>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Outsider 密钥审批</h1>
+      <p id="countdown" aria-live="polite">正在加载请求…</p>
+    </header>
+
+    <section id="alert-box" role="alert" hidden></section>
+
+    <section id="tofu-box" hidden>
+      <p id="tofu-message"></p>
+      <button type="button" id="trust-btn" hidden>信任并继续</button>
+    </section>
+
+    <section id="context-section" hidden>
+      <dl>
+        <dt>申请设备</dt>
+        <dd id="ctx-device"></dd>
+
+        <dt>密钥名称</dt>
+        <dd>
+          <code id="ctx-name"></code>
+          <button type="button" id="copy-name-btn">复制名称</button>
+        </dd>
+
+        <dt>申请理由</dt>
+        <dd id="ctx-reason"></dd>
+
+        <dt>目标命令</dt>
+        <dd><pre id="ctx-command"></pre></dd>
+      </dl>
+    </section>
+
+    <section id="form-section" hidden>
+      <form id="secret-form" method="post" action="javascript:void(0)" autocomplete="on">
+        <p>
+          <label for="username">密钥标识（供密码管理器匹配）</label>
+          <input
+            id="username"
+            name="username"
+            type="text"
+            autocomplete="username"
+            readonly
+          >
+        </p>
+
+        <p>
+          <label for="secret-single" id="secret-label">密钥内容</label>
+          <input
+            id="secret-single"
+            name="password"
+            type="password"
+            autocomplete="current-password"
+            autofocus
+            required
+          >
+          <textarea
+            id="secret-multi"
+            rows="6"
+            placeholder="粘贴多行私钥或证书内容"
+            hidden
+            disabled
+          ></textarea>
+        </p>
+
+        <p class="actions">
+          <button type="button" id="paste-btn">粘贴</button>
+          <button type="button" id="toggle-mode-btn">切换为多行输入</button>
+          <button type="submit" id="submit-btn" disabled>加密并发送</button>
+        </p>
+      </form>
+    </section>
+
+    <hr>
+
+    <details id="trusted-devices-panel">
+      <summary>本地已信任设备 (<span id="trusted-count">0</span>)</summary>
+      <ul id="trusted-list"></ul>
+      <p id="trusted-empty">暂无已信任的申请端设备。</p>
+    </details>
+  </main>
+</body>
+</html>

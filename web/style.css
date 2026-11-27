@@ -1,0 +1,62 @@
+body {
+  max-width: 36rem;
+  margin: 1.5rem auto;
+  padding: 0 1rem;
+  font-family: system-ui, -apple-system, sans-serif;
+  line-height: 1.5;
+}
+
+label {
+  display: block;
+  margin-bottom: 0.25rem;
+}
+
+input,
+textarea {
+  width: 100%;
+  box-sizing: border-box;
+  font: inherit;
+  padding: 0.4rem;
+}
+
+textarea,
+pre,
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+dt {
+  font-weight: 600;
+  margin-top: 0.5rem;
+}
+
+dd {
+  margin-left: 0;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.status-ok {
+  border-left: 3px solid #166534;
+  padding-left: 0.75rem;
+}
+
+.status-warn {
+  border-left: 3px solid #a16207;
+  padding-left: 0.75rem;
+}
+
+.status-err {
+  border-left: 3px solid #b91c1c;
+  padding-left: 0.75rem;
+}

@@ -1,0 +1,9 @@
+# Runtime-injected local skills directory
+/skills/
+
+# Build & packaging outputs
+/cli/target/
+/dist/
+**/__pycache__/
+*.pyc
+.DS_Store
