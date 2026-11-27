@@ -8,24 +8,35 @@ For brevity, define the command prefix (or invoke `uvx --from ...` directly):
 OUTSIDER="uvx --from git+https://github.com/BeautyyuYanli/Outsider@main#subdirectory=cli outsider"
 ```
 
-## 1. Multi-variable `.env` via SOPS (Recommended)
+## 1. Multi-variable Secrets via SOPS (Recommended)
 
-Store non-sensitive local config in `.env`, and encrypt sensitive variables into `.env.enc` with SOPS (`age`). Keep only the single-line `AGE-SECRET-KEY-1...` in Bitwarden under `https://relay.example.com/approve/myproject-sops/`.
+Store non-sensitive local config in `.env`, and encrypt sensitive variables into a flat YAML file (e.g. `secrets.enc.yaml` or `~/.secrets.enc.yaml`) with SOPS (`age`). Key names stay visible in plaintext; only values are encrypted. Keep only the single-line `AGE-SECRET-KEY-1...` in Bitwarden under `https://relay.example.com/approve/myproject-sops/`.
 
 ```bash
-# Inject decrypted .env.enc into process memory (no plaintext file written)
+# Inject decrypted secrets into process memory (no plaintext file written)
 uvx --from 'git+https://github.com/BeautyyuYanli/Outsider@main#subdirectory=cli' outsider run \
   --name "myproject-sops" \
   --reason "Run staging integration tests" \
   --env SOPS_AGE_KEY \
-  -- sops exec-env .env.enc "pytest tests/integration/"
+  -- sops exec-env secrets.enc.yaml "pytest tests/integration/"
 
 # For tools requiring an --env-file path (e.g. docker compose)
 uvx --from 'git+https://github.com/BeautyyuYanli/Outsider@main#subdirectory=cli' outsider run \
   --name "myproject-sops" \
   --reason "Start staging stack" \
   --env SOPS_AGE_KEY \
-  -- sops exec-file .env.enc "docker compose --env-file {} up -d"
+  -- sops exec-file --output-type dotenv secrets.enc.yaml "docker compose --env-file {} up -d"
+
+# Append or update a single secret key without plaintext touching disk, ps, or LLM context
+uvx --from 'git+https://github.com/BeautyyuYanli/Outsider@main#subdirectory=cli' outsider run \
+  --name "personal-sops" \
+  --reason "Step 1/2: Unlock ~/.secrets.enc.yaml to set NEW_KEY" \
+  --env SOPS_AGE_KEY \
+  -- uvx --from 'git+https://github.com/BeautyyuYanli/Outsider@main#subdirectory=cli' outsider run \
+    --name "new-key" \
+    --reason "Step 2/2: Provide secret value for NEW_KEY" \
+    --env NEW_SECRET_VAL \
+    -- sh -c 'set -eu; python3 -c "import json, os, sys; sys.stdout.write(json.dumps(os.environ[\"NEW_SECRET_VAL\"]))" | sops set --value-stdin "$HOME/.secrets.enc.yaml" '\''["NEW_KEY"]'\'''
 ```
 
 ## 2. GitHub CLI (`gh`) Without Persisting Token to Disk

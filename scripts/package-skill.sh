@@ -3,18 +3,15 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT_DIR="${ROOT_DIR}/dist"
-STAGE_DIR="$(mktemp -d)"
+SKILL_DIR="${OUT_DIR}/skill/outsider"
 
-cleanup() {
-  rm -rf "${STAGE_DIR}"
-}
-trap cleanup EXIT
-
-mkdir -p "${STAGE_DIR}/outsider/references" "${OUT_DIR}"
-cp "${ROOT_DIR}/docs/SKILL.md" "${STAGE_DIR}/outsider/SKILL.md"
-cp -R "${ROOT_DIR}/docs/references/." "${STAGE_DIR}/outsider/references/"
+rm -rf "${SKILL_DIR}"
+mkdir -p "${SKILL_DIR}/references" "${OUT_DIR}"
+cp "${ROOT_DIR}/docs/SKILL.md" "${SKILL_DIR}/SKILL.md"
+cp -R "${ROOT_DIR}/docs/references/." "${SKILL_DIR}/references/"
 
 ARCHIVE="${OUT_DIR}/outsider-skill.tar.gz"
-tar -czf "${ARCHIVE}" -C "${STAGE_DIR}" outsider
+tar -czf "${ARCHIVE}" -C "${OUT_DIR}/skill" outsider
 
+echo "[package-skill] Staged  ${SKILL_DIR}"
 echo "[package-skill] Created ${ARCHIVE}"
