@@ -271,24 +271,17 @@ default_redact = true
 
 ### 3.6 Agent Skill 分发结构
 
-按照「二进制 + `SKILL.md` 作为一个 Skill 分发」的要求，通过根目录 `scripts/package-skill.sh` 从 `docs/SKILL.md`、`docs/references/` 与编译产物组装如下分发包：
+Skill 默认通过 `uvx` 直接基于 GitHub `main` 分支执行 `outsider`（无需在 Skill 内打包平台二进制），通过根目录 `scripts/package-skill.sh` 从 `docs/SKILL.md` 与 `docs/references/` 组装跨平台分发包 `dist/outsider-skill.tar.gz`：
 
 ```text
 outsider/
-├── SKILL.md                    # Agent 指令规范（触发场景、命令模板、安全红线）
-├── bin/
-│   └── outsider                # 平台原生静态二进制（单平台分发包）
-│   # 或多架构通用包：
-│   # ├── outsider              # 极简 POSIX wrapper，按 uname -s/-m 分发
-│   # ├── outsider-linux-x86_64
-│   # ├── outsider-linux-aarch64
-│   # └── outsider-darwin-aarch64
+├── SKILL.md                    # Agent 指令规范（默认通过 uvx 运行、触发场景、安全红线）
 └── references/
-    └── handoff-examples.md     # 常见工具（sops/gh/docker/ssh/psql/curl/gpg）的交接命令速查
+    └── handoff-examples.md     # 常见工具（sops/gh/ssh/psql/curl/openssl）的交接命令速查
 ```
 
 **`SKILL.md` 必须包含的核心规则**：
-1. **何时触发**：当任务需要敏感密钥/凭证、且宿主机环境变量或配置文件中不存在时，主动调用 `bin/outsider run`；若项目采用 SOPS 加密的 `.env.enc` 管理多变量敏感配置，优先使用 `--env SOPS_AGE_KEY -- sops exec-env .env.enc "..."`（或 `sops exec-file`）组合。
+1. **何时触发**：当任务需要敏感密钥/凭证、且宿主机环境变量或配置文件中不存在时，主动通过 `uvx --from 'git+https://github.com/BeautyyuYanli/Outsider@main#subdirectory=cli' outsider run` 申请；若项目采用 SOPS 加密的 `.env.enc` 管理多变量敏感配置，优先使用 `--env SOPS_AGE_KEY -- sops exec-env .env.enc "..."`（或 `sops exec-file`）组合。
 2. **禁止泄露红线**：
    - 严禁尝试让目标命令 `echo` / `printenv` 或写文件来转存/打印密钥；优先使用不写磁盘的运行模式（如 `--env GH_TOKEN -- gh ...`，避免 `gh auth login` 等持久化写盘命令）。
    - 严禁使用 `--arg-placeholder`（除非目标工具完全不支持 `env`/`stdin`/`file`/`askpass`）。
@@ -545,7 +538,7 @@ Outsider/
 │   └── references/
 │       └── handoff-examples.md        # 常见工具交接命令速查
 ├── scripts/
-│   ├── package-skill.sh               # 交叉编译并从 docs/ 组装 outsider-skill-<target>.tar.gz
+│   ├── package-skill.sh               # 从 docs/ 组装纯 uvx 跨平台 outsider-skill.tar.gz
 │   ├── pep517_backend.py              # 零依赖 PEP 517 后端（将原生二进制打入 .data/scripts/）
 │   └── build-wheels.sh                # 构建独立 outsider 与 outsider-relay 原生 wheel
 ├── protocol/
@@ -609,4 +602,4 @@ Outsider/
 2. **`relay/`（Go 中转端）**：实现无数据库 `relay.toml` 白名单验签（支持 `SIGHUP` 热重载与环境变量覆盖）与 nonce 防重放、纯内存会话状态机（TTL 自动过期）与 `chan` 毫秒级唤醒、25 秒分片长轮询、`[[notifiers]]`（官方 `shoutrrr` + 可模板化 `webhook` + 可选 `redact_notification_metadata`），以及 `embed.FS` 内嵌静态审批页服务。
 3. **`web/`（批准端）**：采用语义化原生 HTML + 极低 CSS（无视觉设计，后续再美化），实现原生 WebCrypto `Ed25519` 验签 + 浏览器本地 TOFU 信任表（同屏首次点击「信任并继续」保存、同名公钥突变告警阻断、原生 `<details>` 本地设备查看/移除）、表单与路径前缀 `/approve/<name_slug>/<approve_token>`（Bitwarden `autocomplete="current-password"`、单行/多行切换、粘贴按钮、纯文本倒计时）、WebCrypto 原生 `X25519` 加密与严格 CSP（`style-src 'self'; form-action 'none'`）。
 4. **`cli/`（Rust 申请端）**：实现 `init`（直接输出可粘贴 `relay.toml` 片段）、`id`、`doctor`、`run`（由 `--name` 自动生成 URL slug 与 `stderr` 状态提示）及 5 种交接模式（`env`、`stdin`、`file`、`askpass`、`arg`）、`--redact` 子进程输出流式脱敏、内存 `zeroize` 与信号清理。
-5. **`docs/SKILL.md`、`docs/references/` 与 `scripts/package-skill.sh`**：编写 Agent Skill 规范、交接示例文档与打包脚本，组装「静态二进制 + `SKILL.md`」Skill 分发包。
+5. **`docs/SKILL.md`、`docs/references/` 与 `scripts/package-skill.sh`**：编写默认基于 GitHub `main` 分支 `uvx` 调用的 Agent Skill 规范、交接示例文档与跨平台打包脚本。

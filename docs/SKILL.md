@@ -5,7 +5,11 @@ description: Request temporary secrets out-of-band via human approval without st
 
 # Outsider — Out-of-Band Secret Handoff
 
-Use `bin/outsider run` (or `uvx outsider run` when installed via `uvx`) to request a human-approved secret and inject it directly into a target command's process memory. Plaintext secrets never touch disk or enter the conversation context.
+Execute Outsider via `uvx` from GitHub's `main` branch to request a human-approved secret and inject it directly into a target command's process memory. Plaintext secrets never touch disk or enter the conversation context.
+
+```bash
+uvx --from 'git+https://github.com/BeautyyuYanli/Outsider@main#subdirectory=cli' outsider ...
+```
 
 ## When to Trigger
 
@@ -15,7 +19,7 @@ Use `bin/outsider run` (or `uvx outsider run` when installed via `uvx`) to reque
 ## Command Pattern
 
 ```bash
-bin/outsider run \
+uvx --from 'git+https://github.com/BeautyyuYanli/Outsider@main#subdirectory=cli' outsider run \
   --name "<short-ascii-name>" \
   --reason "<clear explanation of why and what will run>" \
   <handoff-flag> \
@@ -40,12 +44,12 @@ See [references/handoff-examples.md](references/handoff-examples.md) for concret
 3. **Clear approval context**:
    - `--name` MUST be a concise, consistent ASCII identifier (e.g., `prod-db`, `gh-release`, `myproject-sops`), because it also forms the Bitwarden prefix URL `/approve/<name-slug>/`.
    - `--reason` MUST clearly state why the secret is needed right now.
-4. **No retry loops on timeout**: If `bin/outsider` exits with code `102` (approval expired/cancelled), inform the user and ask whether to retry. Never automatically re-trigger notifications in a loop.
+4. **No retry loops on timeout**: If `outsider` exits with code `102` (approval expired/cancelled), inform the user and ask whether to retry. Never automatically re-trigger notifications in a loop.
 
 ## Exit Codes
 
 - `0` (or target exit code): Target command executed.
-- `100`: Local config or CLI argument error (check `bin/outsider doctor`).
+- `100`: Local config or CLI argument error (diagnose with `uvx --from 'git+https://github.com/BeautyyuYanli/Outsider@main#subdirectory=cli' outsider doctor`).
 - `101`: Relay unreachable or device public key not authorized.
 - `102`: Approval timed out or cancelled.
 - `103`: Ciphertext decryption or AAD integrity check failed.

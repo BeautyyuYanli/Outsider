@@ -1,6 +1,12 @@
 # Outsider Handoff Examples
 
-All examples assume `outsider` has been initialized with `outsider init` and approved in `relay.toml`.
+All examples invoke `outsider` via `uvx` from GitHub's `main` branch and assume this device has been initialized (`outsider init`) and approved in `relay.toml`.
+
+For brevity, define the command prefix (or invoke `uvx --from ...` directly):
+
+```bash
+OUTSIDER="uvx --from git+https://github.com/BeautyyuYanli/Outsider@main#subdirectory=cli outsider"
+```
 
 ## 1. Multi-variable `.env` via SOPS (Recommended)
 
@@ -8,14 +14,14 @@ Store non-sensitive local config in `.env`, and encrypt sensitive variables into
 
 ```bash
 # Inject decrypted .env.enc into process memory (no plaintext file written)
-bin/outsider run \
+uvx --from 'git+https://github.com/BeautyyuYanli/Outsider@main#subdirectory=cli' outsider run \
   --name "myproject-sops" \
   --reason "Run staging integration tests" \
   --env SOPS_AGE_KEY \
   -- sops exec-env .env.enc "pytest tests/integration/"
 
 # For tools requiring an --env-file path (e.g. docker compose)
-bin/outsider run \
+uvx --from 'git+https://github.com/BeautyyuYanli/Outsider@main#subdirectory=cli' outsider run \
   --name "myproject-sops" \
   --reason "Start staging stack" \
   --env SOPS_AGE_KEY \
@@ -27,7 +33,7 @@ bin/outsider run \
 Use `GH_TOKEN` instead of `gh auth login` so nothing is written to `~/.config/gh/hosts.yml`.
 
 ```bash
-bin/outsider run \
+uvx --from 'git+https://github.com/BeautyyuYanli/Outsider@main#subdirectory=cli' outsider run \
   --name "gh-release" \
   --reason "Create GitHub release v1.2.0" \
   --env GH_TOKEN \
@@ -37,7 +43,7 @@ bin/outsider run \
 ## 3. PostgreSQL (`psql`)
 
 ```bash
-bin/outsider run \
+uvx --from 'git+https://github.com/BeautyyuYanli/Outsider@main#subdirectory=cli' outsider run \
   --name "prod-db" \
   --reason "Run schema migration 0042" \
   --env PGPASSWORD \
@@ -47,7 +53,7 @@ bin/outsider run \
 ## 4. Authenticated HTTP API (`curl`)
 
 ```bash
-bin/outsider run \
+uvx --from 'git+https://github.com/BeautyyuYanli/Outsider@main#subdirectory=cli' outsider run \
   --name "cloudflare-api" \
   --reason "Purge CDN cache after deploy" \
   --env AUTH_HEADER="Authorization: Bearer {{secret}}" \
@@ -60,14 +66,14 @@ On Linux, `--file` writes the secret to a `0600` file in `/dev/shm` (RAM) and ov
 
 ```bash
 # SSH private key
-bin/outsider run \
+uvx --from 'git+https://github.com/BeautyyuYanli/Outsider@main#subdirectory=cli' outsider run \
   --name "prod-ssh-key" \
   --reason "Check systemd service status on prod-web-01" \
   --file \
   -- ssh -i {{file}} -o IdentitiesOnly=yes ops@prod-web-01 "systemctl status app"
 
 # Kubeconfig
-bin/outsider run \
+uvx --from 'git+https://github.com/BeautyyuYanli/Outsider@main#subdirectory=cli' outsider run \
   --name "prod-kubeconfig" \
   --reason "Inspect rollout status" \
   --file-env KUBECONFIG \
@@ -78,14 +84,14 @@ bin/outsider run \
 
 ```bash
 # Git push over SSH/HTTPS with passphrase or token prompt
-bin/outsider run \
+uvx --from 'git+https://github.com/BeautyyuYanli/Outsider@main#subdirectory=cli' outsider run \
   --name "git-ssh-passphrase" \
   --reason "Push release tag v1.2.0" \
   --askpass \
   -- git push origin v1.2.0
 
 # Sudo without TTY prompt
-bin/outsider run \
+uvx --from 'git+https://github.com/BeautyyuYanli/Outsider@main#subdirectory=cli' outsider run \
   --name "server-sudo" \
   --reason "Reload nginx config" \
   --askpass \
@@ -96,7 +102,7 @@ bin/outsider run \
 
 ```bash
 # Decrypt an OpenSSL encrypted archive
-bin/outsider run \
+uvx --from 'git+https://github.com/BeautyyuYanli/Outsider@main#subdirectory=cli' outsider run \
   --name "backup-passphrase" \
   --reason "Verify backup integrity" \
   --stdin \
