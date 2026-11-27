@@ -272,13 +272,11 @@ description = "GitHub release token"
 
 ### 3.6 Agent Skill 分发结构
 
-Skill 默认通过 `uvx` 直接基于 GitHub `main` 分支执行 `outsider`（无需在 Skill 内打包平台二进制），通过根目录 `scripts/package-skill.sh` 从 `docs/SKILL.md` 与 `docs/references/` 组装跨平台分发包 `dist/outsider-skill.tar.gz`：
+Skill 默认通过 `uvx` 直接基于 GitHub `main` 分支执行 `outsider`（无需在 Skill 内打包平台二进制），通过根目录 `scripts/package-skill.sh` 从单文件 `docs/SKILL.md` 组装跨平台分发包 `dist/outsider-skill.tar.gz`（完整参数由各子命令 `--help` 自解释）：
 
 ```text
 outsider/
-├── SKILL.md                    # Agent 指令规范（默认通过 uvx 运行、SOPS 优先、安全红线）
-└── references/
-    └── handoff-examples.md     # 原生 SOPS、name 登记与 Direct 交接命令速查
+└── SKILL.md                    # 单文件 Agent Skill 指令规范（uvx 入口、SOPS/Direct 示例、安全红线）
 ```
 
 ---
@@ -428,9 +426,7 @@ Outsider/
 ├── docs/
 │   ├── design.md                      # 本文档
 │   ├── go-cli-sops-design.md          # Go CLI 重写与原生 SOPS 集成详细设计
-│   ├── SKILL.md                       # Agent Skill 指令规范模板
-│   └── references/
-│       └── handoff-examples.md        # 交接与 SOPS 命令速查
+│   └── SKILL.md                       # 单文件 Agent Skill 指令规范模板
 └── scripts/
     ├── package-skill.sh               # 从 docs/ 组装纯 uvx 跨平台 outsider-skill.tar.gz
     ├── pep517_backend.py              # 零依赖 PEP 517 后端（将 Go 静态二进制打入 .data/scripts/）

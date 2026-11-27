@@ -68,7 +68,7 @@ func runRun(args []string) int {
 	fs.BoolVar(&useFile, "file", false, "Write secret(s) to 0600 temp file and replace `{{file}}` in target command")
 	fs.StringVar(&fileEnv, "file-env", "", "Write secret(s) to 0600 temp file and pass its path in the given env var")
 	fs.StringVar(&fileFormat, "file-format", "dotenv", "Serialization format for multi-key SOPS --file/--file-env: dotenv, yaml, json")
-	fs.BoolVar(&useAskpass, "askpass", false, "Provide single secret via SSH_ASKPASS / GIT_ASKPASS / SUDO_ASKPASS")
+	fs.BoolVar(&useAskpass, "askpass", false, "Provide single secret via SSH_ASKPASS / GIT_ASKPASS / SUDO_ASKPASS (use 'sudo -A' for sudo)")
 	fs.StringVar(&argPlaceholder, "arg-placeholder", "", "Replace placeholder in target command arguments (legacy fallback; visible in ps)")
 	fs.BoolVar(&saveName, "save-name", false, "Register/verify --name in config.toml after successful approval")
 
